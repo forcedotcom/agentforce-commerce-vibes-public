@@ -1,202 +1,125 @@
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+<!--
+  Copyright 2026 Salesforce, Inc.
 
-- [Commerce Vibes v2](#commerce-vibes-v2)
-  - [New to v2?](#new-to-v2)
-  - [Quick Links](#quick-links)
-  - [Prerequisites](#prerequisites)
-  - [First-run commands](#first-run-commands)
-  - [Packages](#packages)
-  - [AI Skills](#ai-skills)
-  - [AI Rules](#ai-rules)
-  - [AI Agents](#ai-agents)
-  - [AI Commands](#ai-commands)
-  - [Development](#development)
-  - [Testing](#testing)
-  - [Contributing](#contributing)
-  - [Branch Model](#branch-model)
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+-->
 
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+# Agentforce Commerce Vibes
 
-# Commerce Vibes v2
+**AI-powered development assistant for Salesforce B2C Commerce developers**
 
-Commerce Cloud development assistant built on Agentforce Vibes v4 (AFV) architecture.
-Replaces Commerce Vibes v1.0 (Cline-based) with the ADX agent harness from
-`@salesforce/sfdx-agent-sdk` — using `MastraHarnessFactory` for LLM Gateway
-integration — in a Turborepo monorepo. See
-[`docs/decisions/agentic-dx-adoption.md`](docs/decisions/agentic-dx-adoption.md)
-for the harness-adoption ADR.
+Agentforce Commerce Vibes is an AI-powered tool available to B2C Commerce developers as an easy-to-install Visual Studio Code extension. Built on the Salesforce Coding Agent Platform and powered by Claude, it brings intelligent coding assistance directly into your development workflow—purpose-built for cartridge development, storefront customization, and B2C Commerce operations.
 
-## New to v2?
+## What Can Agentforce Commerce Vibes Do?
 
-Commerce Vibes v2 is built on the AFV v4 architecture, customized for
-**Salesforce B2C Commerce Cloud only** (no Salesforce Platform support).
-It uses Commerce Cloud authentication (AM OAuth + ECOM token exchange) and
-B2C Commerce-specific tools, skills, and MCP servers.
+Use Agentforce Commerce Vibes to enhance developer productivity across all aspects of B2C Commerce development.
 
-**Clone and build:**
+### 💬 Chat
+Use agentic chat to get development help in natural language. Describe what you want to build, debug, or understand—the agent determines the best approach and works directly in your workspace. Chat supports streaming responses, multi-tab conversations, inline diff review for file changes, and automatic context management for long sessions.
 
-Clone into a separate directory so v2's `node_modules` and build artifacts
-don't conflict when you switch back to work on `master` (v1.0):
+### 📋 Plan Mode
+For complex tasks, use Plan Mode to review and approve a structured plan before anything executes. Describe your feature, iterate on the plan in conversation, and click **Approve Plan** to start execution. No files change until you approve.
 
+### 🔍 Diff Review
+Every file the agent edits is surfaced for your review with line-by-line diffs. Accept or reject changes file by file, or bulk accept all. Select any file to open a native VS Code diff editor showing exactly what changed.
+
+### 🧰 Skills, MCP Servers, and Rules
+Manage everything that shapes how the agent works from a single Toolkit panel.
+
+- **Skills**: Pre-built B2C Commerce skills from the B2C Developer Toolkit, auto-updated on every activation. Toggle skills on or off or create your own. See [Agent Skills & Plugins](https://salesforcecommercecloud.github.io/b2c-developer-tooling/guide/agent-skills.html) in the B2C Developer Toolkit.
+- **Model Context Protocol (MCP) Servers**: The B2C Commerce DX MCP server ships out of the box, giving the agent access to tools for cartridge management, deployment, and Commerce API operations. Add custom MCP servers via `.mcp.json`. See [MCP Server](https://salesforcecommercecloud.github.io/b2c-developer-tooling/mcp/) in the B2C Developer Toolkit.
+- **Rules**: Persistent developer instructions the agent respects across every session. Store them in `.afv/rules/` and commit to version control so your whole team benefits.
+
+### 🔐 Sign In
+Sign in once with your Salesforce credentials. The extension handles authentication and keeps you connected across sessions.
+
+### 🔎 Conversation Search and Export
+Search across all your local chat history by keyword. Export any conversation to a Markdown file with timestamps and speaker labels.
+
+## Requirements
+
+- VS Code `^1.101.0`
+- Salesforce B2C Commerce account
+- `dw.json` in your workspace root
+- Node.js `>=22.15.1`
+
+## Get Started
+
+### 1. Install
+Install **Agentforce Commerce Vibes** from the VS Code Marketplace and open the Agentforce Commerce Vibes panel in the Activity Bar.
+
+### 2. Complete Setup
+The setup screen validates prerequisites before the chat unlocks.
+
+| Step | What it checks |
+|------|----------------|
+| Connected Commerce Org | Salesforce default org is authorized |
+| B2C Commerce CLI | CLI is installed and accessible |
+| B2C Commerce Extension | Required VS Code extension is present |
+| B2C Commerce Project | Workspace contains a recognized B2C project (SFRA cartridges, PWA Kit v3, or Storefront Next) |
+
+### 3. Authorize Your Salesforce Org
+Click the **Connected Commerce Org** step to open the sign-in overlay. Enter your Salesforce org URL—the URL you use to log into Salesforce. The extension opens a terminal to run the Salesforce CLI login command. After authenticating in your browser, click **Re-check** to validate the connection.
+
+**Examples of org URLs:**
+- Production: `login.salesforce.com` or `mycompany.my.salesforce.com`
+- Sandbox: `mycompany--sandbox1.sandbox.my.salesforce.com`
+
+Alternatively, run the Salesforce CLI command directly in your terminal:
+
+**For production orgs (using default login URL):**
 ```bash
-# Clone v2.0 branch (AFV v4-based) into separate directory
-git clone -b feature/afv-v4.0-clean git@github.com:SalesforceCommerceCloud/commerce-vibes-builder.git commerce-vibes-v2
-cd commerce-vibes-v2
-corepack enable && pnpm install && pnpm build
+sf org login web --set-default
 ```
 
-**Branch structure**:
-- `master` — Commerce Vibes v1.0 (Cline/3.x-based, npm, different architecture)
-- `feature/afv-v4.0-clean` — Commerce Vibes v2.0 (AFV v4-based, pnpm + Turborepo monorepo)
-
-Keep them in separate directories to avoid `node_modules` and build artifact conflicts.
-
-**Read in this order:**
-
-1. [docs/overview.md](docs/overview.md) -- architecture, roadmap, scope decisions
-2. [docs/developing.md](docs/developing.md) -- commands, conventions, dependency management, logging policy, spec/story-driven workflows
-3. The `spec.md` in whichever package you'll work in first (e.g., [packages/core/spec.md](packages/core/spec.md))
-
-**Commerce Vibes v2 Migration:** Key changes from v1.0:
-- Replace Salesforce authentication with Commerce Cloud (AM OAuth + ECOM token exchange)
-- Replace Salesforce DX MCP with B2C Commerce DX MCP
-- Replace Salesforce skills with Commerce skills (via B2C CLI)
-- Remove all Salesforce Platform dependencies (SObject context, SFDX project detection)
-- Update system prompts for Commerce domain (cartridges, ISML, OCAPI, Business Manager)
-
-**Open a PR:** all PRs target `feature/afv-v4.0-clean`. Use the `afv-pr` skill to
-get the base branch and conventions right.
-
-## Quick Links
-
-- **Overview**: [docs/overview.md](docs/overview.md) -- AFV v4 architecture (base for Commerce Vibes v2)
-- **Developing**: [docs/developing.md](docs/developing.md) -- commands, conventions, workflows, principles
-- **ADRs**: [docs/decisions/](docs/decisions/) -- architecture decision records
-- **v3 → v4 subsystem changes**: [docs/v3-to-v4-subsystem-changes.md](docs/v3-to-v4-subsystem-changes.md) -- per-subsystem migration reference
-- **Testing**: [docs/testing/](docs/testing/) -- parity matrix, telemetry parity, cross-boundary error scenarios
-- **Feature specs**: each package and subsystem has a co-located `spec.md` (e.g., [packages/core/spec.md](packages/core/spec.md), [packages/core/src/prompts/spec.md](packages/core/src/prompts/spec.md))
-
-## Prerequisites
-
-- **Node.js** >= 24
-- **pnpm** >= 10 — enabled via corepack (ships with Node): `corepack enable`
-
-`nvm` is not required — `pnpm` auto-manages Node version via `.npmrc`. The `.nvmrc` is provided for convenience and CI.
-
-## First-run commands
-
+**For any other org (sandbox, My Domain, or a custom domain):**
 ```bash
-pnpm install      # Install all dependencies
-pnpm run build    # Build all packages
-pnpm run all      # Full validation: install → build → lint → test
+sf org login web --instance-url https://<your-org-url> --set-default
+```
+Replace `<your-org-url>` with the full URL you use to log into Salesforce (for example, `mycompany--dev.sandbox.my.salesforce.com`).
+
+After all setup steps show as ready, the chat panel unlocks.
+
+### 4. Start Building
+The chat panel unlocks. Try:
+
+```
+"Create a new SFRA cartridge called my-site-customizations"
+"Debug why my ISML template isn't rendering the promotion banner"
+"Write a custom hook for the order confirmation pipeline"
+"Show me how to call the Product Search API"
 ```
 
-Full command reference — including `dev`, `test`, `lint:*`, per-package turbo
-filters, and extension bundling — lives in
-[docs/developing.md > Common Commands](docs/developing.md#common-commands).
+## Configuration
 
-## Packages
+Manage extension settings from the Agentforce Commerce Vibes Settings panel inside VS Code. In the Agentforce Commerce Vibes activity bar, click the gear icon to access model selection, debug logging, permissions, and other options.
 
-| Package | Description |
-|---------|-------------|
-| `@afv/core` | Agent types, SDK adapters, tools, hooks, services, observability (unchanged from AFV v4) |
-| `@afv/features` | Feature logic: MCP (B2C Commerce DX), skills (Commerce), abilities (sub-path exports) |
-| `@afv/webview` | Chat UI assembly, shared components, config UIs (Commerce-branded) |
-| `@afv/extension` | VS Code shell: activation, **Commerce Cloud auth**, project detection. **Published name**: `commerce-vibes` |
-| `@afv/e2e` | Trace-based end-to-end tests |
-| `@afv/azure-insights` | KQL queries, Bicep templates, codegen |
+## Troubleshooting
 
-## AI Skills
+**Skills not loading**
 
-Skills are interactive workflows in `.claude/skills/` that work in both
-Cursor and Claude Code. Invoke by name or description.
+Run **Agentforce Commerce Vibes: Refresh Commerce Skills** from the Command Palette to re-download the latest skill set.
 
-| Skill | When to use |
-|-------|-------------|
-| `afv-feature-implement` | Starting a new feature, porting a 3.x subsystem, or doing foundational `@afv/core`/extension/shared-infra work — walks through plan, scaffold, implement, and verify (features are the primary track; foundation deltas are called out in the skill) |
-| `afv-refine-wi` | Fleshing out a skeletal work item from `docs/v4-implementation-plan.md` into an implementation-ready spec (Why block, Description, Acceptance Criteria, Assumptions) |
-| `afv-pr` | Opening or updating a PR — targets `afv-v4.0` with correct base branch and conventions; auto-detects create vs update for the current branch |
-| `afv-merge` | Pulling `afv-v4.0` into a long-running feature branch — proactive structural rebasing, merge execution, post-merge audit, forward-fix, and adaptation-gap sweep. Pairs with `afv-pr` (the merge does not ship — `afv-pr` does) and `afv-spec-sync` (spec drift surfaced during alignment). |
-| `afv-storybook-prototype` | UX work — creating a skeleton-first Storybook component with mock data variants |
-| `afv-storybook-implement` | Eng work — wiring a UX prototype into a production component with real data |
-| `afv-debug` | Verifying a code change in the running extension — tails `afv.log` and `trace.md` around a manual probe and reports a PASS/FAIL verdict against a checklist derived from the change. Pairs with `afv-feature-implement`'s implement → bundle → reload → tail-verify cycle. |
-| `afv-spec-sync` | After implementation changes — checks spec.md files for drift against source code |
-| `afv-release` | Release-process questions — versioning, alpha/beta/GA promotion, marketplace publishing, cutover, rollback, nightly pipeline. Also flags documentation gaps when found. |
-| `afv-changelog` | Drafting v4 pre-release notes — generates a curated `CHANGELOG.md` block from commits since the last pre-release tag for the release engineer to review before a cut. Feeds the notes the pipeline ships on each GitHub Release. |
-| `afv-declare-feature-dependency` | Declaring that one `@afv/features` feature may import from another — edits the importer's Biome GritQL deny-list plugin under `scripts/biome-plugins/`. Name-only invocation (model-triggered description matching is disabled). |
+**MCP server not connecting**
 
-## AI Rules
+Open the Toolkit panel, check the MCP tab for the server status, and click **Reconnect**.
 
-Rules are auto-applied guidance in `.claude/rules/` that trigger when
-matching files are edited. They enforce conventions without requiring
-explicit invocation.
+**Capture diagnostics**
 
-| Rule | Applies when editing |
-|------|---------------------|
-| `afv-spec-lint` | `docs/spec-template.md`, `docs/spec-frontmatter.schema.json`, `**/spec.md` — required headings, audience-appropriate summary, and forbidden sections. Propagates template/schema changes across all specs. (Frontmatter shape is enforced by the schema via `pnpm lint:md:integrity`.) |
-| `afv-spec-hygiene` | `**/spec.md` — keeps specs focused on design intent, not volatile implementation details |
-| `afv-arch-docs` | Package / dependency graph / CoreConfig / biome.jsonc / convention-doc files — enforces matching updates to `docs/overview.md`, `docs/developing.md`, and per-package `biome.jsonc` |
+Run **Agentforce Commerce Vibes: Copy Diagnostics** from the Command Palette to copy system info and recent events to your clipboard for support.
 
-## AI Agents
+**Enable debug logs**
 
-Specialized subagents in `.claude/agents/` that the model can dispatch
-for focused, deep-context work. Each has its own system prompt, model,
-and a description that controls when the parent agent should delegate.
+Open the Agentforce Commerce Vibes Settings panel, enable debug logging, then run **Agentforce Commerce Vibes: Open Debug Logs**.
 
-| Agent | When the parent should dispatch |
-|-------|--------------------------------|
-| `afv-abilities-feature-expert` | Working with, modifying, or debugging the Abilities feature across `@afv/features` and `@afv/extension` |
-| `afv-telemetry-expert` | Telemetry work — writing KQL, modifying Observer sinks, working with `@afv/azure-insights`, analyzing event flows |
+## Privacy and Telemetry
 
-## AI Commands
+Agentforce Commerce Vibes collects anonymized usage telemetry (extension lifecycle events, feature usage, error rates) to improve the product. No source code, file contents, or personally identifiable information is included. Telemetry follows the [Salesforce Privacy Policy](https://www.salesforce.com/company/privacy/).
 
-Commands in `.claude/commands/` are explicit multi-step workflows invoked
-by name (unlike skills, they don't trigger on natural-language phrasing).
+To opt out, set `telemetry.telemetryLevel` to `"off"` in your VS Code settings.
 
-| Command | What it does |
-|---------|-------------|
-| `afv-update-dev-deps` | Updates dev dependencies in small batches from the `pnpm-workspace.yaml` catalog, running install/lint/build/test after each batch so regressions surface incrementally |
+## License
 
-## Development
-
-**F5 to debug:** press F5 to launch an Extension Development Host with the
-esbuild watcher running. The bundler rebuilds `dist/extension.js` on every
-save. Press **Cmd+R** (Ctrl+R) in the dev host window to reload with your
-changes. Breakpoints in `packages/extension/src/` work through sourcemaps.
-
-**`pnpm dev` for type-checking:** runs a single root `tsc -b --watch` with
-correct cross-package rebuild ordering. Run it in a terminal alongside F5
-to get real-time type errors while developing. esbuild skips type errors
-for fast bundling, so a type error won't block the F5 debug cycle — but
-`pnpm dev` will catch it.
-
-## Testing
-
-| Script | What it does |
-|---|---|
-| `pnpm test` | Full unit + e2e replay-mode sweep. The CI lane. |
-| `pnpm test:e2e` | E2E specs only, replay mode (uses `*.fixture.json` siblings, no network, no auth). |
-| `pnpm test:e2e:live` | Re-runs e2e specs against real LLMG. Requires `SFDX_AUTH_URL` (CI) or `SF_TARGET_ORG` (dev laptop, after `sf org login`). |
-
-See [docs/developing.md > Testing](docs/developing.md#testing) for the
-full table including `test:watch`, `test:unit`, `test:e2e:record` and `AFV_E2E_MODE` dispatch.
-
-## Contributing
-
-All PRs target `feature/afv-v4.0-clean` (not `main`). Use the `afv-pr`
-skill to open or update PRs with the correct base branch.
-
-## Branch Model
-
-This is the `feature/afv-v4.0-clean` branch -- built on AFV v4 architecture,
-customized for Commerce Cloud only.
-
-**Key differences from Agentforce Vibes v4**:
-- **Commerce Cloud authentication** (AM OAuth + ECOM token exchange) instead of Salesforce org auth
-- **B2C Commerce DX MCP server** instead of Salesforce DX
-- **Commerce skills** instead of Salesforce skills
-- **No Salesforce Platform support** (SObject context, SFDX project, Extension Pack removed)
-- **Commerce-specific system prompts** (cartridges, ISML, OCAPI, Business Manager)
-
-See [docs/overview.md](docs/overview.md) for the AFV v4 architecture that Commerce Vibes v2 is built on.
+This extension is licensed under the [Apache 2.0 License](LICENSE.txt).
