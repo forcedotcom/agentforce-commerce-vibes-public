@@ -1,0 +1,244 @@
+name: Publish to OpenVSX
+
+# Publishes to OpenVSX Registry. Same structure as publish-vscode.yml but targets
+# OpenVSX instead of VS Code Marketplace. Runs in parallel with publish-vscode.yml.
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v4.1.0). Leave empty to use the latest release.'
+        required: false
+        type: string
+      dry-run:
+        description: 'Verify but do NOT publish to OpenVSX.'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: publish-openvsx-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish VSIX to OpenVSX
+    runs-on: ubuntu-latest
+    environment: publish
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      EXPECTED_MONOREPO: ${{ vars.EXPECTED_MONOREPO || 'SalesforceCommerceCloud/commerce-vibes-builder' }}
+      EVENT_NAME: ${{ github.event_name }}
+      RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+      INPUT_TAG: ${{ github.event.inputs.tag }}
+      THIS_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: ${{ vars.NODE_VERSION || 'lts/*' }}
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="$RELEASE_TAG_NAME"
+          elif [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG=$(gh release list --repo "$THIS_REPO" --limit 1 --json tagName --jq '.[0].tagName')
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a release tag to publish"
+            exit 1
+          fi
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Refusing to publish unexpected tag '$TAG'"
+            exit 1
+          fi
+          echo "Publishing tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download VSIX from release
+        id: download
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" \
+            --repo "$THIS_REPO" \
+            --pattern '*.vsix' \
+            --dir /tmp/vsix
+          COUNT=$(ls /tmp/vsix/*.vsix 2>/dev/null | wc -l)
+          if [ "$COUNT" -lt 1 ]; then
+            echo "::error::Expected at least one .vsix on release $TAG, found $COUNT"
+            exit 1
+          fi
+          echo "::notice::Downloaded $COUNT VSIX files"
+          echo "vsix_dir=/tmp/vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Verify build provenance (SLSA attestation) — fourth gate, fail closed
+        env:
+          VSIX_DIR: ${{ steps.download.outputs.vsix_dir }}
+        run: |
+          set -euo pipefail
+          for VSIX in "$VSIX_DIR"/*.vsix; do
+            echo "::notice::Verifying attestation for $(basename "$VSIX")"
+            gh attestation verify "$VSIX" \
+              --repo "$EXPECTED_MONOREPO" \
+              --signer-workflow "${EXPECTED_MONOREPO}/.github/workflows/build-and-release.yml" \
+              --source-ref refs/heads/main
+          done
+
+      - name: Cross-check VSIX against committed release marker — fail closed
+        env:
+          VSIX_DIR: ${{ steps.download.outputs.vsix_dir }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          MARKER="releases/${VERSION}.json"
+          if [ ! -f "$MARKER" ]; then
+            echo "::error::No committed marker $MARKER on main; refusing to publish"
+            exit 1
+          fi
+          EXPECTED_SHA=$(jq -r '.vsixSha256 // empty' "$MARKER")
+          echo "$EXPECTED_SHA" | grep -Eq '^[a-f0-9]{64}$' \
+            || { echo "::error::marker $MARKER vsixSha256 missing/malformed"; exit 1; }
+
+          VSIX=$(ls "$VSIX_DIR"/*.vsix | head -1)
+          ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::VSIX sha256 does not match $MARKER. expected=$EXPECTED_SHA actual=$ACTUAL_SHA"
+            exit 1
+          fi
+          echo "::notice::VSIX matches committed marker $MARKER"
+
+      - name: Publish to OpenVSX
+        env:
+          OVSX_PERSONAL_ACCESS_TOKEN: ${{ secrets.OVSX_PERSONAL_ACCESS_TOKEN }}
+          VSIX_DIR: ${{ steps.download.outputs.vsix_dir }}
+          DRY_RUN: ${{ github.event.inputs.dry-run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "::notice::DRY RUN: would publish the following VSIXes:"
+            ls -lh "$VSIX_DIR"/*.vsix
+            exit 0
+          fi
+
+          # Install ovsx CLI
+          npm install -g ovsx
+
+          # Publish each VSIX
+          for VSIX in "$VSIX_DIR"/*.vsix; do
+            echo "::notice::Publishing $(basename "$VSIX") to OpenVSX"
+            ovsx publish "$VSIX" -p "$OVSX_PERSONAL_ACCESS_TOKEN"
+          done
+
+  slack-notify:
+    name: Notify Slack (success)
+    needs: publish
+    if: always() && needs.publish.result == 'success' && github.event.inputs.dry-run != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        if: env.IDEE_MAIN_SLACK_WEBHOOK != ''
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.IDEE_MAIN_SLACK_WEBHOOK }}
+        with:
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "🎉 Commerce Vibes Released to OpenVSX!",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🎉 Commerce Vibes Released to OpenVSX!"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    { "type": "mrkdwn", "text": "*Marketplace:*\nOpenVSX" },
+                    { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
+                    { "type": "mrkdwn", "text": "*Tag:*\n${{ needs.publish.outputs.tag }}" },
+                    { "type": "mrkdwn", "text": "*Version:*\n${{ needs.publish.outputs.version }}" }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Workflow Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
+                  }
+                }
+              ]
+            }
+
+  slack-notify-failure:
+    name: Notify Slack (failure)
+    needs: publish
+    if: always() && needs.publish.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        if: env.IDEE_MAIN_SLACK_WEBHOOK != ''
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.IDEE_MAIN_SLACK_WEBHOOK }}
+        with:
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "❌ OpenVSX publish failed",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "❌ OpenVSX publish failed"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    { "type": "mrkdwn", "text": "*Marketplace:*\nOpenVSX" },
+                    { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
+                    { "type": "mrkdwn", "text": "*Tag:*\n${{ needs.publish.outputs.tag }}" },
+                    { "type": "mrkdwn", "text": "*Version:*\n${{ needs.publish.outputs.version }}" }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Workflow Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    { "type": "mrkdwn", "text": "Check the workflow logs for detailed error information." }
+                  ]
+                }
+              ]
+            }

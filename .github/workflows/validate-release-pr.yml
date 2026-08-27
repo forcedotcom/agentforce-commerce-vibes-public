@@ -1,0 +1,129 @@
+name: Validate release PR
+
+# Independent verification workflow — re-verifies VSIX SHA256 and SLSA build provenance
+# from scratch against the committed release marker. This runs INDEPENDENTLY of the
+# receiver that opened the PR, so it catches any drift or tampering between PR open
+# and merge. Dispatched by receive-monorepo-release.yml after opening the PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_branch:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Re-verify VSIX attestation and marker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write # post check-run to the PR
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      EXPECTED_MONOREPO: ${{ vars.EXPECTED_MONOREPO || 'SalesforceCommerceCloud/commerce-vibes-builder' }}
+      RELEASE_BRANCH: ${{ github.event.inputs.release_branch }}
+      VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.RELEASE_BRANCH }}
+
+      - name: Read release marker
+        id: marker
+        run: |
+          set -euo pipefail
+          MARKER="releases/${VERSION}.json"
+          if [ ! -f "$MARKER" ]; then
+            echo "::error::No committed marker $MARKER on $RELEASE_BRANCH"
+            exit 1
+          fi
+
+          MONOREPO_REPO=$(jq -r '.monorepoRepo // empty' "$MARKER")
+          MONOREPO_TAG=$(jq -r '.monorepoTag // empty' "$MARKER")
+          EXPECTED_SHA=$(jq -r '.vsixSha256 // empty' "$MARKER")
+
+          # Validate marker contents
+          echo "$EXPECTED_SHA" | grep -Eq '^[a-f0-9]{64}$' \
+            || { echo "::error::marker $MARKER vsixSha256 missing/malformed"; exit 1; }
+          [ "$MONOREPO_REPO" = "$EXPECTED_MONOREPO" ] \
+            || { echo "::error::marker monorepoRepo '$MONOREPO_REPO' != expected '$EXPECTED_MONOREPO'"; exit 1; }
+          [ "$MONOREPO_TAG" = "v${VERSION}" ] \
+            || { echo "::error::marker monorepoTag '$MONOREPO_TAG' != expected 'v${VERSION}'"; exit 1; }
+
+          {
+            echo "monorepo_repo=$MONOREPO_REPO"
+            echo "monorepo_tag=$MONOREPO_TAG"
+            echo "expected_sha=$EXPECTED_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download VSIX from monorepo release
+        env:
+          MONOREPO_REPO: ${{ steps.marker.outputs.monorepo_repo }}
+          MONOREPO_TAG: ${{ steps.marker.outputs.monorepo_tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$MONOREPO_TAG" \
+            --repo "$MONOREPO_REPO" \
+            --pattern '*.vsix' \
+            --dir /tmp/vsix
+          COUNT=$(ls /tmp/vsix/*.vsix 2>/dev/null | wc -l)
+          [ "$COUNT" -ge 1 ] || { echo "::error::No .vsix on ${MONOREPO_REPO}@${MONOREPO_TAG}"; exit 1; }
+          echo "VSIX_DIR=/tmp/vsix" >> "$GITHUB_ENV"
+
+      - name: Verify VSIX SHA256 against marker — fail closed
+        env:
+          EXPECTED_SHA: ${{ steps.marker.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          # Verify first VSIX (representative check)
+          VSIX=$(ls "$VSIX_DIR"/*.vsix | head -1)
+          ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::VSIX sha256 mismatch. marker=$EXPECTED_SHA actual=$ACTUAL_SHA"
+            exit 1
+          fi
+          echo "::notice::VSIX SHA256 matches marker: $ACTUAL_SHA"
+
+      - name: Verify SLSA build provenance — fail closed
+        env:
+          MONOREPO_REPO: ${{ steps.marker.outputs.monorepo_repo }}
+        run: |
+          set -euo pipefail
+          for VSIX in "$VSIX_DIR"/*.vsix; do
+            echo "::notice::Verifying attestation for $(basename "$VSIX")"
+            gh attestation verify "$VSIX" \
+              --repo "$MONOREPO_REPO" \
+              --signer-workflow "${MONOREPO_REPO}/.github/workflows/build-and-release.yml" \
+              --source-ref refs/heads/main
+          done
+
+      - name: Post validation check-run to PR
+        env:
+          EXPECTED_SHA: ${{ steps.marker.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          jq -n \
+            --arg sha "$HEAD_SHA" \
+            --arg v "$VERSION" \
+            --arg digest "$EXPECTED_SHA" \
+            '{
+              name: "validate-release-pr",
+              head_sha: $sha,
+              status: "completed",
+              conclusion: "success",
+              output: {
+                title: ("Release PR validated for " + $v),
+                summary: ("Independent re-verification: VSIX SHA-256 `" + $digest + "` matches committed marker, and SLSA build provenance verified from scratch.")
+              }
+            }' \
+          | gh api "repos/${{ github.repository }}/check-runs" --method POST --input -

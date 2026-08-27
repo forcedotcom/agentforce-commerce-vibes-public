@@ -1,0 +1,189 @@
+name: Poll monorepo for new VSIX release
+
+# Pull-based trigger for the release pipeline. THIS repo (public) polls the private
+# monorepo (SalesforceCommerceCloud/commerce-vibes-builder) for new VSIX releases
+# using its own GITHUB_TOKEN (the monorepo's releases are public). When a new release
+# is found, it fires a repository_dispatch to ITSELF to wake receive-monorepo-release.yml.
+#
+# Why this needs no cross-repo credentials:
+#   * The monorepo's releases are public, so `gh release ...` uses only this repo's
+#     GITHUB_TOKEN — no external/cross-repo credential.
+#   * A repository_dispatch fired with GITHUB_TOKEN is EXEMPT from GitHub's
+#     recursion guard, so it DOES trigger the receiver.
+#
+# Why the untrusted dispatch payload is safe:
+#   * The payload only decides WHICH release to wake the receiver for.
+#   * The receiver re-downloads the VSIX and re-verifies sha256 + SLSA build
+#     provenance from scratch and FAILS CLOSED. Trust comes from attestation.
+#
+# Idempotency — never re-raises a PR or re-publishes an already-handled release.
+
+on:
+  schedule:
+    # Every 30 minutes, offset off the top of the hour
+    - cron: '9,39 * * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional: force-check a specific version (e.g. 4.1.0). Leave empty to check the latest monorepo extension release.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: poll-monorepo-release
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    name: Check monorepo for an unprocessed release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for repository_dispatch
+      pull-requests: read # Required for idempotency guard PR queries
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Allowlisted source repo. Override via repo variable for sandbox testing.
+      EXPECTED_MONOREPO: ${{ vars.EXPECTED_MONOREPO || 'SalesforceCommerceCloud/commerce-vibes-builder' }}
+      THIS_REPO: ${{ github.repository }}
+      # Untrusted manual input — bound to env, validated before use
+      IN_VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - name: Resolve target release from the monorepo
+        id: resolve
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          if [ -n "${IN_VERSION:-}" ]; then
+            # Manual fast-path: a specific version was requested
+            echo "$IN_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
+              || fail "input version '$IN_VERSION' is not valid semver"
+            VERSION="$IN_VERSION"
+            TAG="v${VERSION}"
+            # Confirm the release exists on the monorepo
+            gh release view "$TAG" --repo "$EXPECTED_MONOREPO" >/dev/null 2>&1 \
+              || fail "no release '$TAG' on $EXPECTED_MONOREPO"
+          else
+            # Scheduled path: pick the highest STABLE version from monorepo
+            # Enumerate ALL releases via paginated REST API for semver-max
+            VERSION=$(gh api "repos/${EXPECTED_MONOREPO}/releases?per_page=100" \
+                --paginate --jq '.[].tag_name' \
+              | jq -R -s -r '
+                [ split("\n")[]
+                  | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                  | sub("^v";"") ]
+                | if length == 0 then empty
+                  else ( map(split(".") | map(tonumber)) | sort | last | map(tostring) | join(".") )
+                  end')
+            if [ -z "$VERSION" ]; then
+              echo "::notice::No stable release found on $EXPECTED_MONOREPO; nothing to do"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            TAG="v${VERSION}"
+          fi
+
+          echo "::notice::Target monorepo extension release: $TAG"
+          {
+            echo "skip=false"
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already published or a release PR already exists
+        id: guard
+        if: steps.resolve.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="v${VERSION}"
+          BRANCH="release/${VERSION}"
+
+          # (1) Already published in this repo?
+          if gh release view "$RELEASE_TAG" --repo "$THIS_REPO" >/dev/null 2>&1; then
+            echo "::notice::Release $RELEASE_TAG already exists in $THIS_REPO; skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # (2) Has a release PR for this version ever existed?
+          PR_STATE=$(gh pr list --repo "$THIS_REPO" --head "$BRANCH" --state all \
+            --json state,headRefName \
+          | jq -r --arg b "$BRANCH" \
+              'map(select(.headRefName == $b)) | if length == 0 then "NONE" else .[0].state end')
+
+          case "$PR_STATE" in
+            MERGED)
+              echo "::notice::Release PR for $RELEASE_TAG was MERGED; skipping"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            OPEN)
+              echo "::notice::Release PR for $RELEASE_TAG is OPEN; skipping"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            CLOSED)
+              echo "::notice::Release PR for $RELEASE_TAG was CLOSED without merging; skipping"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            NONE)
+              echo "::notice::$RELEASE_TAG is new; will wake the receiver"
+              echo "skip=false" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::Unexpected PR state '$PR_STATE' for $BRANCH; failing closed"
+              exit 1 ;;
+          esac
+
+      - name: Download VSIX and compute sha256
+        id: sha
+        if: steps.resolve.outputs.skip != 'true' && steps.guard.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" \
+            --repo "$EXPECTED_MONOREPO" \
+            --pattern '*.vsix' \
+            --dir /tmp/vsix
+          COUNT=$(ls /tmp/vsix/*.vsix 2>/dev/null | wc -l | tr -d ' ')
+          [ "$COUNT" -ge 1 ] || { echo "::error::expected at least one .vsix on ${EXPECTED_MONOREPO}@${TAG}, found $COUNT"; exit 1; }
+          # Compute SHA256 for the first VSIX (representative integrity check)
+          VSIX=$(ls /tmp/vsix/*.vsix | head -1)
+          SHA=$(sha256sum "$VSIX" | awk '{print $1}')
+          echo "::notice::VSIX sha256: $SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Wake the receiver (fire repository_dispatch to self)
+        if: steps.resolve.outputs.skip != 'true' && steps.guard.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VSIX_SHA256: ${{ steps.sha.outputs.sha }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          RELEASE_URL="${SERVER_URL}/${EXPECTED_MONOREPO}/releases/tag/${TAG}"
+
+          # Build the client_payload for receive-monorepo-release.yml
+          jq -n \
+            --arg version "$VERSION" \
+            --arg repo "$EXPECTED_MONOREPO" \
+            --arg tag "$TAG" \
+            --arg url "$RELEASE_URL" \
+            --arg sha "$VSIX_SHA256" \
+            '{
+              event_type: "monorepo-vsx-release",
+              client_payload: {
+                version: $version,
+                monorepo_repo: $repo,
+                monorepo_tag: $tag,
+                release_url: $url,
+                vsix_sha256: $sha
+              }
+            }' \
+          | gh api "repos/${THIS_REPO}/dispatches" --method POST --input -
+
+          echo "::notice::Dispatched monorepo-vsx-release for ${TAG} to ${THIS_REPO}"
