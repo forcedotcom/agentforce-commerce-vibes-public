@@ -86,10 +86,10 @@ After all setup steps show as ready, the chat panel unlocks.
 The chat panel unlocks. Try:
 
 ```
-"Create a new SFRA cartridge called my-site-customizations"
-"Debug why my ISML template isn't rendering the promotion banner"
-"Write a custom hook for the order confirmation pipeline"
+"Create a Storefront Next project with default settings"
+"Update the storefront theme colors to match a new brand palette"
 "Show me how to call the Product Search API"
+"Deploy my SFRA cartridges to sandbox"
 ```
 
 ## Configuration
@@ -98,21 +98,13 @@ Manage extension settings from the Agentforce Commerce Vibes Settings panel insi
 
 ## Troubleshooting
 
-**Skills not loading**
+- **Skills not loading** — Run **Agentforce Commerce Vibes: Refresh Commerce Skills** from the Command Palette to re-download the latest skill set.
 
-Run **Agentforce Commerce Vibes: Refresh Commerce Skills** from the Command Palette to re-download the latest skill set.
+- **MCP server not connecting** — Open the Toolkit panel, check the MCP tab for the server status, and click **Reconnect**.
 
-**MCP server not connecting**
+- **Capture diagnostics** — Run **Agentforce Commerce Vibes: Copy Diagnostics** from the Command Palette to copy system info and recent events to your clipboard for support.
 
-Open the Toolkit panel, check the MCP tab for the server status, and click **Reconnect**.
-
-**Capture diagnostics**
-
-Run **Agentforce Commerce Vibes: Copy Diagnostics** from the Command Palette to copy system info and recent events to your clipboard for support.
-
-**Enable debug logs**
-
-Open the Agentforce Commerce Vibes Settings panel, enable debug logging, then run **Agentforce Commerce Vibes: Open Debug Logs**.
+- **Enable debug logs** — Open the Agentforce Commerce Vibes Settings panel, enable debug logging, then run **Agentforce Commerce Vibes: Open Debug Logs**.
 
 ## Privacy and Telemetry
 
