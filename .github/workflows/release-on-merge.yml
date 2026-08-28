@@ -74,18 +74,18 @@ jobs:
             echo "expected_sha=$EXPECTED_SHA"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Download VSIX from monorepo release
+      - name: Download VSIX from public repo release
         env:
-          MONOREPO_REPO: ${{ steps.marker.outputs.monorepo_repo }}
-          MONOREPO_TAG: ${{ steps.marker.outputs.monorepo_tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          gh release download "$MONOREPO_TAG" \
-            --repo "$MONOREPO_REPO" \
+          # Download from THIS repo's release (created by monorepo via mirror-to-public-repo.yml)
+          gh release download "v${VERSION}" \
+            --repo "${{ github.repository }}" \
             --pattern '*.vsix' \
             --dir /tmp/vsix
           COUNT=$(ls /tmp/vsix/*.vsix 2>/dev/null | wc -l)
-          [ "$COUNT" -ge 1 ] || { echo "::error::No .vsix on ${MONOREPO_REPO}@${MONOREPO_TAG}"; exit 1; }
+          [ "$COUNT" -ge 1 ] || { echo "::error::No .vsix on ${{ github.repository }}@v${VERSION}"; exit 1; }
           echo "VSIX_DIR=/tmp/vsix" >> "$GITHUB_ENV"
 
       - name: Verify VSIX SHA256 — third gate, fail closed
