@@ -242,7 +242,7 @@ jobs:
             printf -- '- `releases/latest.json` — pointer updated to this version\n\n'
 
             printf '### What happens on merge\n\n'
-            printf '1. `release-on-merge` re-verifies the VSIX SHA-256 and SLSA build provenance.\n'
+            printf '1. `publish-on-merge` re-verifies the VSIX SHA-256 and SLSA build provenance.\n'
             printf '2. Creates the `%s` release in this repo with the VSIX attached.\n' "$RELEASE_TAG"
             printf '3. Triggers `publish-vscode` and `publish-openvsx`, which verify provenance once more, then publish.\n\n'
 

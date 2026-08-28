@@ -1,4 +1,4 @@
-name: Release on merge
+name: Publish on merge
 
 # Verifies and approves a release PR. This is the third verification gate — re-verifies
 # VSIX SHA256 and SLSA attestation after human review. On merge, triggers marketplace
@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    name: Create release from merged PR
+  publish:
+    name: Trigger marketplace publishing from merged PR
     if: >-
       github.event.pull_request.merged == true &&
       contains(github.event.pull_request.labels.*.name, 'release')

@@ -1,6 +1,6 @@
 name: Publish to VS Code Marketplace
 
-# Final marketplace publish workflow. Triggered by workflow_dispatch from release-on-merge.yml
+# Final marketplace publish workflow. Triggered by workflow_dispatch from publish-on-merge.yml
 # after a release PR is merged and human-approved. This is the FOURTH and FINAL verification gate —
 # re-verifies SLSA attestation and marker SHA256 before calling vsce publish.
 
