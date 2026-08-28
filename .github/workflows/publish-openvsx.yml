@@ -128,9 +128,12 @@ jobs:
           fi
           echo "::notice::VSIX matches committed marker $MARKER"
 
-      - name: Publish to OpenVSX
+      # Publish all VSIXes (5 platform-specific: darwin-arm64, darwin-x64, linux-arm64,
+      # linux-x64, win32-x64). The salesforcecli composite action expects a single file,
+      # so we use ovsx directly. Each publish is idempotent (--skip-duplicate).
+      - name: Publish to Open VSX Registry
         env:
-          OVSX_PERSONAL_ACCESS_TOKEN: ${{ secrets.OVSX_PERSONAL_ACCESS_TOKEN }}
+          OVSX_PAT: ${{ secrets.IDEE_OVSX_PAT }}
           VSIX_DIR: ${{ steps.download.outputs.vsix_dir }}
           DRY_RUN: ${{ github.event.inputs.dry-run || 'false' }}
         run: |
@@ -148,97 +151,5 @@ jobs:
           # Publish each VSIX
           for VSIX in "$VSIX_DIR"/*.vsix; do
             echo "::notice::Publishing $(basename "$VSIX") to OpenVSX"
-            ovsx publish "$VSIX" -p "$OVSX_PERSONAL_ACCESS_TOKEN"
+            ovsx publish "$VSIX" --skip-duplicate
           done
-
-  slack-notify:
-    name: Notify Slack (success)
-    needs: publish
-    if: always() && needs.publish.result == 'success' && github.event.inputs.dry-run != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Notify Slack
-        if: env.IDEE_MAIN_SLACK_WEBHOOK != ''
-        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.IDEE_MAIN_SLACK_WEBHOOK }}
-        with:
-          webhook-type: incoming-webhook
-          payload: |
-            {
-              "text": "🎉 Commerce Vibes Released to OpenVSX!",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "🎉 Commerce Vibes Released to OpenVSX!"
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    { "type": "mrkdwn", "text": "*Marketplace:*\nOpenVSX" },
-                    { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
-                    { "type": "mrkdwn", "text": "*Tag:*\n${{ needs.publish.outputs.tag }}" },
-                    { "type": "mrkdwn", "text": "*Version:*\n${{ needs.publish.outputs.version }}" }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Workflow Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
-                  }
-                }
-              ]
-            }
-
-  slack-notify-failure:
-    name: Notify Slack (failure)
-    needs: publish
-    if: always() && needs.publish.result == 'failure'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Notify Slack
-        if: env.IDEE_MAIN_SLACK_WEBHOOK != ''
-        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.IDEE_MAIN_SLACK_WEBHOOK }}
-        with:
-          webhook-type: incoming-webhook
-          payload: |
-            {
-              "text": "❌ OpenVSX publish failed",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "❌ OpenVSX publish failed"
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    { "type": "mrkdwn", "text": "*Marketplace:*\nOpenVSX" },
-                    { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
-                    { "type": "mrkdwn", "text": "*Tag:*\n${{ needs.publish.outputs.tag }}" },
-                    { "type": "mrkdwn", "text": "*Version:*\n${{ needs.publish.outputs.version }}" }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Workflow Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
-                  }
-                },
-                {
-                  "type": "context",
-                  "elements": [
-                    { "type": "mrkdwn", "text": "Check the workflow logs for detailed error information." }
-                  ]
-                }
-              ]
-            }
