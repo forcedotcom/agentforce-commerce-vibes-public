@@ -249,7 +249,8 @@ jobs:
             printf '### Review checklist\n\n'
             printf -- '- [ ] Version `%s` is the intended release\n' "$VERSION"
             printf -- '- [ ] Changelog reads correctly\n'
-            printf -- '- [ ] `release-provenance` and `validate-release-pr` checks are green\n\n'
+            printf -- '- [ ] `release-provenance` and `validate-release-pr` checks are green\n'
+            printf -- '- [ ] PR has the `publish` label (auto-added, triggers marketplace publishing on merge)\n\n'
           } > "$PR_BODY_FILE"
 
           if gh pr view "$BRANCH" --repo "${{ github.repository }}" >/dev/null 2>&1; then
@@ -264,9 +265,9 @@ jobs:
               --body-file "$PR_BODY_FILE"
           fi
 
-          # Tag the PR with 'release' label
-          gh pr edit "$BRANCH" --repo "${{ github.repository }}" --add-label release 2>/dev/null \
-            || echo "::notice::'release' label not present in repo; skipping"
+          # Tag the PR with 'publish' label to trigger marketplace publishing on merge
+          gh pr edit "$BRANCH" --repo "${{ github.repository }}" --add-label publish 2>/dev/null \
+            || echo "::notice::'publish' label not present in repo; skipping"
 
       - name: Post provenance check-run and dispatch independent validation
         if: steps.validate.outputs.skip != 'true'
