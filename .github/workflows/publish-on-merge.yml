@@ -1,8 +1,8 @@
-name: Release on merge
+name: Publish on merge
 
-# Creates a GitHub release when a release PR is merged. This is the third verification
-# gate — re-verifies VSIX SHA256 and SLSA attestation before creating the release.
-# The release creation then triggers publish-vscode.yml and publish-openvsx.yml.
+# Verifies and approves a release PR. This is the third verification gate — re-verifies
+# VSIX SHA256 and SLSA attestation after human review. On merge, triggers marketplace
+# publishing workflows (publish-vscode.yml and publish-openvsx.yml) via workflow_dispatch.
 
 on:
   pull_request:
@@ -13,14 +13,15 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    name: Create release from merged PR
+  publish:
+    name: Trigger marketplace publishing from merged PR
     if: >-
       github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'release')
+      contains(github.event.pull_request.labels.*.name, 'publish')
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create the GitHub release
+      contents: read # read release and repository contents
+      actions: write # trigger publish-vscode.yml workflow
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       EXPECTED_MONOREPO: ${{ vars.EXPECTED_MONOREPO || 'SalesforceCommerceCloud/commerce-vibes-builder' }}
@@ -132,23 +133,31 @@ jobs:
             echo "Release v${VERSION}" > /tmp/release-notes.md
           fi
 
-      - name: Create GitHub release
+      - name: Trigger marketplace publishing workflows
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           RELEASE_TAG="v${VERSION}"
 
-          # Skip if release already exists (idempotency)
-          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "::notice::Release $RELEASE_TAG already exists; skipping"
-            exit 0
+          # Verify release exists
+          if ! gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::Release $RELEASE_TAG does not exist"
+            exit 1
           fi
 
-          # Create release with all VSIXes attached
-          gh release create "$RELEASE_TAG" \
-            --title "v${VERSION}" \
-            --notes-file /tmp/release-notes.md \
-            "$VSIX_DIR"/*.vsix
+          # Trigger VS Code Marketplace publishing
+          gh workflow run publish-vscode.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            -f tag="$RELEASE_TAG" \
+            -f dry-run=false
 
-          echo "::notice::Created release $RELEASE_TAG"
+          # Trigger OpenVSX publishing
+          gh workflow run publish-openvsx.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            -f tag="$RELEASE_TAG" \
+            -f dry-run=false
+
+          echo "::notice::Triggered marketplace publishing for $RELEASE_TAG"
