@@ -27,11 +27,15 @@ permissions:
 
 jobs:
   publish:
-    name: Publish VSIX to OpenVSX
+    name: Publish VSIX to OpenVSX (${{ matrix.target }})
     runs-on: ubuntu-latest
     environment: publish
     permissions:
       contents: read
+    strategy:
+      matrix:
+        target: [darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64]
+      fail-fast: false # Continue publishing other targets if one fails
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
@@ -78,36 +82,37 @@ jobs:
         id: download
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           gh release download "$TAG" \
             --repo "$THIS_REPO" \
-            --pattern '*.vsix' \
+            --pattern "*-${TARGET}.vsix" \
             --dir /tmp/vsix
-          COUNT=$(ls /tmp/vsix/*.vsix 2>/dev/null | wc -l)
-          if [ "$COUNT" -lt 1 ]; then
-            echo "::error::Expected at least one .vsix on release $TAG, found $COUNT"
+
+          # Find the downloaded VSIX
+          VSIX=$(find /tmp/vsix -name "*-${TARGET}.vsix" | head -1)
+          if [ -z "$VSIX" ]; then
+            echo "::error::No VSIX found for target: $TARGET on release $TAG"
             exit 1
           fi
-          echo "::notice::Downloaded $COUNT VSIX files"
-          echo "vsix_dir=/tmp/vsix" >> "$GITHUB_OUTPUT"
+          echo "::notice::Downloaded VSIX for $TARGET: $(basename "$VSIX")"
+          echo "vsix=$VSIX" >> "$GITHUB_OUTPUT"
 
       - name: Verify build provenance (SLSA attestation) — fourth gate, fail closed
         env:
-          VSIX_DIR: ${{ steps.download.outputs.vsix_dir }}
+          VSIX: ${{ steps.download.outputs.vsix }}
         run: |
           set -euo pipefail
-          for VSIX in "$VSIX_DIR"/*.vsix; do
-            echo "::notice::Verifying attestation for $(basename "$VSIX")"
-            gh attestation verify "$VSIX" \
-              --repo "$EXPECTED_MONOREPO" \
-              --signer-workflow "${EXPECTED_MONOREPO}/.github/workflows/build-and-release.yml" \
-              --source-ref refs/heads/main
-          done
+          echo "::notice::Verifying attestation for $(basename "$VSIX")"
+          gh attestation verify "$VSIX" \
+            --repo "$EXPECTED_MONOREPO" \
+            --signer-workflow "${EXPECTED_MONOREPO}/.github/workflows/build-and-release.yml" \
+            --source-ref refs/heads/main
 
       - name: Cross-check VSIX against committed release marker — fail closed
         env:
-          VSIX_DIR: ${{ steps.download.outputs.vsix_dir }}
+          VSIX: ${{ steps.download.outputs.vsix }}
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
           set -euo pipefail
@@ -120,7 +125,7 @@ jobs:
           echo "$EXPECTED_SHA" | grep -Eq '^[a-f0-9]{64}$' \
             || { echo "::error::marker $MARKER vsixSha256 missing/malformed"; exit 1; }
 
-          VSIX=$(ls "$VSIX_DIR"/*.vsix | head -1)
+          # Verify this VSIX's SHA256
           ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
           if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
             echo "::error::VSIX sha256 does not match $MARKER. expected=$EXPECTED_SHA actual=$ACTUAL_SHA"
@@ -128,28 +133,13 @@ jobs:
           fi
           echo "::notice::VSIX matches committed marker $MARKER"
 
-      # Publish all VSIXes (5 platform-specific: darwin-arm64, darwin-x64, linux-arm64,
-      # linux-x64, win32-x64). The salesforcecli composite action expects a single file,
-      # so we use ovsx directly. Each publish is idempotent (--skip-duplicate).
+      # Publish via IDEE composite action - includes audit logging, token masking, validation
       - name: Publish to Open VSX Registry
+        uses: salesforcecli/github-workflows/.github/actions/vscode/publish-vsix@029fab157f4fa95497bff43f70c2faaf3f0fcf41 # PR #158 merge
+        with:
+          vsix-path: ${{ steps.download.outputs.vsix }}
+          publish-tool: ovsx
+          pre-release: 'false'
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
         env:
           OVSX_PAT: ${{ secrets.IDEE_OVSX_PAT }}
-          VSIX_DIR: ${{ steps.download.outputs.vsix_dir }}
-          DRY_RUN: ${{ github.event.inputs.dry-run || 'false' }}
-        run: |
-          set -euo pipefail
-
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "::notice::DRY RUN: would publish the following VSIXes:"
-            ls -lh "$VSIX_DIR"/*.vsix
-            exit 0
-          fi
-
-          # Install ovsx CLI
-          npm install -g ovsx
-
-          # Publish each VSIX
-          for VSIX in "$VSIX_DIR"/*.vsix; do
-            echo "::notice::Publishing $(basename "$VSIX") to OpenVSX"
-            ovsx publish "$VSIX" --skip-duplicate
-          done
