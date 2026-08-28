@@ -1,0 +1,151 @@
+name: Publish to VS Code Marketplace
+
+# Final marketplace publish workflow. Triggers when a release is created in the public
+# repo (by release-on-merge.yml). This is the FOURTH and FINAL verification gate —
+# re-verifies SLSA attestation and marker SHA256 before calling vsce publish.
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v4.1.0). Leave empty to use the latest release.'
+        required: false
+        type: string
+      dry-run:
+        description: 'Verify (provenance + marker) but do NOT publish to the marketplace.'
+        required: false
+        default: false
+        type: boolean
+
+# Serialize publishes of the SAME tag; never cancel an in-flight upload
+concurrency:
+  group: publish-vscode-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish VSIX to VS Code Marketplace (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    environment: publish # Manual approval gate
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        target: [darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64]
+      fail-fast: false # Continue publishing other targets if one fails
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      EXPECTED_MONOREPO: ${{ vars.EXPECTED_MONOREPO || 'SalesforceCommerceCloud/commerce-vibes-builder' }}
+      EVENT_NAME: ${{ github.event_name }}
+      RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+      INPUT_TAG: ${{ github.event.inputs.tag }}
+      THIS_REPO: ${{ github.repository }}
+    steps:
+      # Checkout main to read committed release markers
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: ${{ vars.NODE_VERSION || 'lts/*' }}
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="$RELEASE_TAG_NAME"
+          elif [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG=$(gh release list --repo "$THIS_REPO" --limit 1 --json tagName --jq '.[0].tagName')
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a release tag to publish"
+            exit 1
+          fi
+          # Constrain tag shape
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Refusing to publish unexpected tag '$TAG'"
+            exit 1
+          fi
+          echo "Publishing tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download VSIX from release
+        id: download
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" \
+            --repo "$THIS_REPO" \
+            --pattern "*-${TARGET}.vsix" \
+            --dir /tmp/vsix
+
+          # Find the downloaded VSIX
+          VSIX=$(find /tmp/vsix -name "*-${TARGET}.vsix" | head -1)
+          if [ -z "$VSIX" ]; then
+            echo "::error::No VSIX found for target: $TARGET on release $TAG"
+            exit 1
+          fi
+          echo "::notice::Downloaded VSIX for $TARGET: $(basename "$VSIX")"
+          echo "vsix=$VSIX" >> "$GITHUB_OUTPUT"
+
+      # Final gate: verify SLSA build provenance before publishing
+      - name: Verify build provenance (SLSA attestation) — fourth gate, fail closed
+        env:
+          VSIX: ${{ steps.download.outputs.vsix }}
+        run: |
+          set -euo pipefail
+          echo "::notice::Verifying attestation for $(basename "$VSIX")"
+          gh attestation verify "$VSIX" \
+            --repo "$EXPECTED_MONOREPO" \
+            --signer-workflow "${EXPECTED_MONOREPO}/.github/workflows/build-and-release.yml" \
+            --source-ref refs/heads/main
+
+      # Defense in depth: cross-check against committed release marker
+      - name: Cross-check VSIX against committed release marker — fail closed
+        env:
+          VSIX: ${{ steps.download.outputs.vsix }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          MARKER="releases/${VERSION}.json"
+          if [ ! -f "$MARKER" ]; then
+            echo "::error::No committed marker $MARKER on main; refusing to publish"
+            exit 1
+          fi
+          EXPECTED_SHA=$(jq -r '.vsixSha256 // empty' "$MARKER")
+          echo "$EXPECTED_SHA" | grep -Eq '^[a-f0-9]{64}$' \
+            || { echo "::error::marker $MARKER vsixSha256 missing/malformed"; exit 1; }
+
+          # Verify this VSIX's SHA256
+          ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::VSIX sha256 does not match $MARKER. expected=$EXPECTED_SHA actual=$ACTUAL_SHA"
+            exit 1
+          fi
+          echo "::notice::VSIX matches committed marker $MARKER"
+
+      # Publish via IDEE composite action - includes audit logging, token masking, validation
+      - name: Publish to VS Code Marketplace
+        uses: salesforcecli/github-workflows/.github/actions/vscode/publish-vsix@029fab157f4fa95497bff43f70c2faaf3f0fcf41 # PR #158 merge
+        with:
+          vsix-path: ${{ steps.download.outputs.vsix }}
+          publish-tool: vsce
+          pre-release: 'false'
+          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
+        env:
+          VSCE_PERSONAL_ACCESS_TOKEN: ${{ secrets.VSCE_PERSONAL_ACCESS_TOKEN }}

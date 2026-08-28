@@ -1,0 +1,154 @@
+name: Release on merge
+
+# Creates a GitHub release when a release PR is merged. This is the third verification
+# gate — re-verifies VSIX SHA256 and SLSA attestation before creating the release.
+# The release creation then triggers publish-vscode.yml and publish-openvsx.yml.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Create release from merged PR
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      EXPECTED_MONOREPO: ${{ vars.EXPECTED_MONOREPO || 'SalesforceCommerceCloud/commerce-vibes-builder' }}
+    steps:
+      - name: Checkout merged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+
+      - name: Detect version from releases/latest.json
+        id: version
+        run: |
+          set -euo pipefail
+          if [ ! -f releases/latest.json ]; then
+            echo "::error::No releases/latest.json in merged commit"
+            exit 1
+          fi
+          VERSION=$(jq -r '.version // empty' releases/latest.json)
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
+            || { echo "::error::invalid version in latest.json: '$VERSION'"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::Detected version: $VERSION"
+
+      - name: Read release marker
+        id: marker
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          MARKER="releases/${VERSION}.json"
+          if [ ! -f "$MARKER" ]; then
+            echo "::error::No marker $MARKER in merged commit"
+            exit 1
+          fi
+
+          MONOREPO_REPO=$(jq -r '.monorepoRepo // empty' "$MARKER")
+          MONOREPO_TAG=$(jq -r '.monorepoTag // empty' "$MARKER")
+          EXPECTED_SHA=$(jq -r '.vsixSha256 // empty' "$MARKER")
+
+          # Validate marker
+          echo "$EXPECTED_SHA" | grep -Eq '^[a-f0-9]{64}$' \
+            || { echo "::error::malformed vsixSha256 in $MARKER"; exit 1; }
+          [ "$MONOREPO_REPO" = "$EXPECTED_MONOREPO" ] \
+            || { echo "::error::monorepoRepo mismatch in $MARKER"; exit 1; }
+          [ "$MONOREPO_TAG" = "v${VERSION}" ] \
+            || { echo "::error::monorepoTag mismatch in $MARKER"; exit 1; }
+
+          {
+            echo "monorepo_repo=$MONOREPO_REPO"
+            echo "monorepo_tag=$MONOREPO_TAG"
+            echo "expected_sha=$EXPECTED_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download VSIX from public repo release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Download from THIS repo's release (created by monorepo via mirror-to-public-repo.yml)
+          gh release download "v${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --pattern '*.vsix' \
+            --dir /tmp/vsix
+          COUNT=$(ls /tmp/vsix/*.vsix 2>/dev/null | wc -l)
+          [ "$COUNT" -ge 1 ] || { echo "::error::No .vsix on ${{ github.repository }}@v${VERSION}"; exit 1; }
+          echo "VSIX_DIR=/tmp/vsix" >> "$GITHUB_ENV"
+
+      - name: Verify VSIX SHA256 — third gate, fail closed
+        env:
+          EXPECTED_SHA: ${{ steps.marker.outputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          VSIX=$(ls "$VSIX_DIR"/*.vsix | head -1)
+          ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::SHA256 mismatch. marker=$EXPECTED_SHA actual=$ACTUAL_SHA"
+            exit 1
+          fi
+          echo "::notice::SHA256 verified: $ACTUAL_SHA"
+
+      - name: Verify SLSA build provenance — third gate, fail closed
+        env:
+          MONOREPO_REPO: ${{ steps.marker.outputs.monorepo_repo }}
+        run: |
+          set -euo pipefail
+          for VSIX in "$VSIX_DIR"/*.vsix; do
+            echo "::notice::Verifying attestation for $(basename "$VSIX")"
+            gh attestation verify "$VSIX" \
+              --repo "$MONOREPO_REPO" \
+              --signer-workflow "${MONOREPO_REPO}/.github/workflows/build-and-release.yml" \
+              --source-ref refs/heads/main
+          done
+
+      - name: Extract changelog section for release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Extract just this version's section from CHANGELOG.md
+          awk -v ver="## ${VERSION}" '
+            $0 == ver { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+
+          # Sanity check: notes should be non-empty
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "::warning::No changelog content for ${VERSION}; using placeholder"
+            echo "Release v${VERSION}" > /tmp/release-notes.md
+          fi
+
+      - name: Create GitHub release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="v${VERSION}"
+
+          # Skip if release already exists (idempotency)
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::notice::Release $RELEASE_TAG already exists; skipping"
+            exit 0
+          fi
+
+          # Create release with all VSIXes attached
+          gh release create "$RELEASE_TAG" \
+            --title "v${VERSION}" \
+            --notes-file /tmp/release-notes.md \
+            "$VSIX_DIR"/*.vsix
+
+          echo "::notice::Created release $RELEASE_TAG"
