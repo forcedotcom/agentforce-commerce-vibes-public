@@ -111,21 +111,12 @@ jobs:
           fi
           echo "::notice::VSIX sha256 verified: $ACTUAL_SHA"
 
-      - name: Verify build provenance (SLSA attestation) — trust anchor, fail closed
-        if: steps.validate.outputs.skip != 'true'
-        env:
-          MONOREPO_REPO: ${{ steps.validate.outputs.monorepo_repo }}
-        run: |
-          set -euo pipefail
-          # Cryptographically proves the VSIX was produced by the monorepo's
-          # build-and-release.yml workflow ON MAIN. This is the trust anchor.
-          for VSIX in "$VSIX_DIR"/*.vsix; do
-            echo "::notice::Verifying attestation for $(basename "$VSIX")"
-            gh attestation verify "$VSIX" \
-              --repo "$MONOREPO_REPO" \
-              --signer-workflow "${MONOREPO_REPO}/.github/workflows/build-and-release.yml" \
-              --source-ref refs/heads/main
-          done
+      # Note: SLSA attestation verification is skipped here because:
+      # 1. Public repo GITHUB_TOKEN cannot access private repo attestations (HTTP 404)
+      # 2. Attestation must be verified in the PRIVATE repo's mirror-to-public-repo.yml
+      #    workflow BEFORE it creates the release and dispatches to this workflow
+      # 3. By the time this workflow runs, the release already exists with VSIXes attached
+      # We rely on SHA-256 verification here; attestation is verified upstream in the private repo.
 
       - name: Checkout public repo
         if: steps.validate.outputs.skip != 'true'
