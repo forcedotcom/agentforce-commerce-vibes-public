@@ -1,11 +1,9 @@
 name: Publish to OpenVSX
 
-# Publishes to OpenVSX Registry. Same structure as publish-vscode.yml but targets
-# OpenVSX instead of VS Code Marketplace. Runs in parallel with publish-vscode.yml.
+# Publishes to OpenVSX Registry. Triggered by workflow_dispatch from release-on-merge.yml
+# after a release PR is merged and human-approved. Runs in parallel with publish-vscode.yml.
 
 on:
-  release:
-    types: [released]
   workflow_dispatch:
     inputs:
       tag:
@@ -19,7 +17,7 @@ on:
         type: boolean
 
 concurrency:
-  group: publish-openvsx-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
+  group: publish-openvsx-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -42,8 +40,6 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       EXPECTED_MONOREPO: ${{ vars.EXPECTED_MONOREPO || 'SalesforceCommerceCloud/commerce-vibes-builder' }}
-      EVENT_NAME: ${{ github.event_name }}
-      RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
       INPUT_TAG: ${{ github.event.inputs.tag }}
       THIS_REPO: ${{ github.repository }}
     steps:
@@ -59,9 +55,7 @@ jobs:
         id: tag
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "release" ]; then
-            TAG="$RELEASE_TAG_NAME"
-          elif [ -n "$INPUT_TAG" ]; then
+          if [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
           else
             TAG=$(gh release list --repo "$THIS_REPO" --limit 1 --json tagName --jq '.[0].tagName')
@@ -82,18 +76,20 @@ jobs:
         id: download
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
+          # Pattern matches: salesforce-commerce-vibes-darwin-arm64-0.3.0.vsix
           gh release download "$TAG" \
             --repo "$THIS_REPO" \
-            --pattern "*-${TARGET}.vsix" \
+            --pattern "*-${TARGET}-${VERSION}.vsix" \
             --dir /tmp/vsix
 
           # Find the downloaded VSIX
-          VSIX=$(find /tmp/vsix -name "*-${TARGET}.vsix" | head -1)
+          VSIX=$(find /tmp/vsix -name "*-${TARGET}-${VERSION}.vsix" | head -1)
           if [ -z "$VSIX" ]; then
-            echo "::error::No VSIX found for target: $TARGET on release $TAG"
+            echo "::error::No VSIX found for target: $TARGET version: $VERSION on release $TAG"
             exit 1
           fi
           echo "::notice::Downloaded VSIX for $TARGET: $(basename "$VSIX")"

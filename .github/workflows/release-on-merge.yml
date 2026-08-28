@@ -133,7 +133,7 @@ jobs:
             echo "Release v${VERSION}" > /tmp/release-notes.md
           fi
 
-      - name: Trigger marketplace publishing workflow
+      - name: Trigger marketplace publishing workflows
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -148,6 +148,13 @@ jobs:
 
           # Trigger VS Code Marketplace publishing
           gh workflow run publish-vscode.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            -f tag="$RELEASE_TAG" \
+            -f dry-run=false
+
+          # Trigger OpenVSX publishing
+          gh workflow run publish-openvsx.yml \
             --repo "${{ github.repository }}" \
             --ref main \
             -f tag="$RELEASE_TAG" \
