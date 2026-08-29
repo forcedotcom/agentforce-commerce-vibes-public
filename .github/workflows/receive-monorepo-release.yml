@@ -37,6 +37,7 @@ jobs:
       IN_MONOREPO_TAG: ${{ github.event.client_payload.monorepo_tag }}
       IN_RELEASE_URL: ${{ github.event.client_payload.release_url }}
       IN_VSIX_SHA256: ${{ github.event.client_payload.vsix_sha256 }}
+      IN_CHANGELOG_SECTION: ${{ github.event.client_payload.changelog_section }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Validate and allowlist payload
@@ -129,21 +130,31 @@ jobs:
           MONOREPO_REPO: ${{ steps.validate.outputs.monorepo_repo }}
           MONOREPO_TAG: ${{ steps.validate.outputs.monorepo_tag }}
           VSIX_SHA256: ${{ steps.validate.outputs.vsix_sha256 }}
+          CHANGELOG_SECTION: ${{ env.IN_CHANGELOG_SECTION }}
         run: |
           set -euo pipefail
           RELEASE_URL="https://github.com/${MONOREPO_REPO}/releases/tag/${MONOREPO_TAG}"
 
-          # Fetch the extension CHANGELOG.md from the monorepo AT THE TAG
-          gh api "repos/${MONOREPO_REPO}/contents/packages/extension/CHANGELOG.md?ref=${MONOREPO_TAG}" \
-            --jq '.content' | base64 -d > /tmp/monorepo-changelog.md
-
-          # Extract just the top (latest) section
+          # Assemble CHANGELOG section from payload or fallback
           NEW_SECTION_FILE=/tmp/vsx-changelog-section.md
-          {
-            echo "## ${VERSION}"
-            echo ""
-            awk '/^## / { if (found) exit; found=1; next } found { print }' /tmp/monorepo-changelog.md
-          } > "$NEW_SECTION_FILE"
+
+          if [ -n "$CHANGELOG_SECTION" ] && [ "$CHANGELOG_SECTION" != "null" ]; then
+            # Use changelog from repository_dispatch payload (sent by private repo)
+            {
+              echo "## ${VERSION}"
+              echo ""
+              echo "$CHANGELOG_SECTION" | jq -r .
+            } > "$NEW_SECTION_FILE"
+          else
+            # Fallback: Use placeholder if changelog not provided in payload
+            {
+              echo "## ${VERSION}"
+              echo ""
+              echo "Release v${VERSION} from ${MONOREPO_REPO}."
+              echo ""
+              echo "See full release notes: ${RELEASE_URL}"
+            } > "$NEW_SECTION_FILE"
+          fi
 
           # Idempotent splice into CHANGELOG.md right after the "# Change Log" header
           python3 - "$NEW_SECTION_FILE" "$VERSION" <<'PY'
