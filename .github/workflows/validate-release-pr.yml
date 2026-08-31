@@ -111,18 +111,8 @@ jobs:
             exit 1
           fi
 
-      - name: Verify SLSA build provenance — fail closed
-        env:
-          MONOREPO_REPO: ${{ steps.marker.outputs.monorepo_repo }}
-        run: |
-          set -euo pipefail
-          for VSIX in "$VSIX_DIR"/*.vsix; do
-            echo "::notice::Verifying attestation for $(basename "$VSIX")"
-            gh attestation verify "$VSIX" \
-              --repo "$MONOREPO_REPO" \
-              --signer-workflow "${MONOREPO_REPO}/.github/workflows/build-and-release.yml" \
-              --source-ref refs/heads/main
-          done
+      # SLSA verification skipped: Public repo GITHUB_TOKEN cannot access private repo attestations (HTTP 404).
+      # SLSA is verified in the private repo before mirroring. Public repo performs multi-gate SHA-256 verification instead.
 
       - name: Post validation check-run to PR
         run: |
@@ -139,7 +129,7 @@ jobs:
               conclusion: "success",
               output: {
                 title: ("Release PR validated for " + $v),
-                summary: "Independent re-verification: All platform VSIXs (darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64) verified against committed marker hashes, and SLSA build provenance verified from scratch."
+                summary: "Independent re-verification: All platform VSIXs (darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64) verified against committed marker hashes. SLSA build provenance is verified in the private repo before mirroring."
               }
             }' \
           | gh api "repos/${{ github.repository }}/check-runs" --method POST --input -
