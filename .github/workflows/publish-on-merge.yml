@@ -59,11 +59,13 @@ jobs:
 
           MONOREPO_REPO=$(jq -r '.monorepoRepo // empty' "$MARKER")
           MONOREPO_TAG=$(jq -r '.monorepoTag // empty' "$MARKER")
-          EXPECTED_SHA=$(jq -r '.vsixSha256 // empty' "$MARKER")
+          VSIX_HASHES=$(jq -c '.vsixSha256Hashes // empty' "$MARKER")
 
           # Validate marker
-          echo "$EXPECTED_SHA" | grep -Eq '^[a-f0-9]{64}$' \
-            || { echo "::error::malformed vsixSha256 in $MARKER"; exit 1; }
+          if ! echo "$VSIX_HASHES" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            echo "::error::malformed or missing vsixSha256Hashes in $MARKER"
+            exit 1
+          fi
           [ "$MONOREPO_REPO" = "$EXPECTED_MONOREPO" ] \
             || { echo "::error::monorepoRepo mismatch in $MARKER"; exit 1; }
           [ "$MONOREPO_TAG" = "v${VERSION}" ] \
@@ -72,7 +74,9 @@ jobs:
           {
             echo "monorepo_repo=$MONOREPO_REPO"
             echo "monorepo_tag=$MONOREPO_TAG"
-            echo "expected_sha=$EXPECTED_SHA"
+            echo "vsix_hashes<<EOF"
+            echo "$VSIX_HASHES"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Download VSIX from public repo release
@@ -91,16 +95,35 @@ jobs:
 
       - name: Verify VSIX SHA256 — third gate, fail closed
         env:
-          EXPECTED_SHA: ${{ steps.marker.outputs.expected_sha }}
+          VSIX_HASHES_JSON: ${{ steps.marker.outputs.vsix_hashes }}
         run: |
           set -euo pipefail
-          VSIX=$(ls "$VSIX_DIR"/*.vsix | head -1)
-          ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
-          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::error::SHA256 mismatch. marker=$EXPECTED_SHA actual=$ACTUAL_SHA"
+          # Verify SHA-256 for each platform VSIX
+          FAILED=0
+          for vsix in "$VSIX_DIR"/*.vsix; do
+            BASENAME=$(basename "$vsix")
+            # Extract platform from filename: salesforce-commerce-vibes-PLATFORM-VERSION.vsix
+            PLATFORM=$(echo "$BASENAME" | sed -E 's/.*-((darwin|linux|win32)-(arm64|x64))-.*/\1/')
+            EXPECTED_SHA=$(echo "$VSIX_HASHES_JSON" | jq -r --arg p "$PLATFORM" '.[$p] // empty')
+
+            if [ -z "$EXPECTED_SHA" ]; then
+              echo "::error::No expected SHA-256 for platform: $PLATFORM"
+              FAILED=1
+              continue
+            fi
+
+            ACTUAL_SHA=$(sha256sum "$vsix" | awk '{print $1}')
+            if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::SHA-256 mismatch for $PLATFORM. expected=$EXPECTED_SHA actual=$ACTUAL_SHA"
+              FAILED=1
+            else
+              echo "::notice::SHA-256 verified for $PLATFORM: $ACTUAL_SHA"
+            fi
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
             exit 1
           fi
-          echo "::notice::SHA256 verified: $ACTUAL_SHA"
 
       # Note: SLSA attestation verification is skipped here because:
       # 1. Public repo GITHUB_TOKEN cannot access private repo attestations (HTTP 404)

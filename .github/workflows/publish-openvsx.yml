@@ -95,19 +95,17 @@ jobs:
           echo "::notice::Downloaded VSIX for $TARGET: $(basename "$VSIX")"
           echo "vsix=$VSIX" >> "$GITHUB_OUTPUT"
 
-      # Note: SHA-256 and SLSA attestation verification are skipped here because:
-      # 1. SHA-256 already verified in publish-on-merge.yml (when PR merged)
+      # Note: SLSA attestation verification is skipped here because:
+      # 1. Public repo GITHUB_TOKEN cannot access private repo attestations
       # 2. SLSA attestation already verified in publish-on-merge.yml (when PR merged)
-      # 3. Public repo GITHUB_TOKEN cannot access private repo attestations
-      # 4. Each platform VSIX has a different SHA-256, but marker file only stores one
-      #    (the first VSIX from mirror workflow), causing verification to fail for other platforms
       #
-      # The verification was already performed in publish-on-merge.yml before this workflow
-      # was triggered. This workflow is only reachable after that gate passed.
+      # We re-verify SHA-256 here as a final gate before publishing to marketplace.
 
-      - name: Verify release marker exists
+      - name: Verify VSIX SHA-256 against marker
         env:
           VERSION: ${{ steps.tag.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          VSIX: ${{ steps.download.outputs.vsix }}
         run: |
           set -euo pipefail
           MARKER="releases/${VERSION}.json"
@@ -115,7 +113,19 @@ jobs:
             echo "::error::No committed marker $MARKER on main; refusing to publish"
             exit 1
           fi
-          echo "::notice::Release marker $MARKER exists on main"
+
+          EXPECTED_SHA=$(jq -r --arg p "$TARGET" '.vsixSha256Hashes[$p] // empty' "$MARKER")
+          if [ -z "$EXPECTED_SHA" ]; then
+            echo "::error::No SHA-256 for platform $TARGET in $MARKER"
+            exit 1
+          fi
+
+          ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::SHA-256 mismatch for $TARGET. expected=$EXPECTED_SHA actual=$ACTUAL_SHA"
+            exit 1
+          fi
+          echo "::notice::SHA-256 verified for $TARGET: $ACTUAL_SHA"
 
       # Publish via IDEE composite action - includes audit logging, token masking, validation
       - name: Publish to Open VSX Registry
