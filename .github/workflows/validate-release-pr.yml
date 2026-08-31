@@ -125,8 +125,6 @@ jobs:
           done
 
       - name: Post validation check-run to PR
-        env:
-          EXPECTED_SHA: ${{ steps.marker.outputs.expected_sha }}
         run: |
           set -euo pipefail
           HEAD_SHA=$(git rev-parse HEAD)
@@ -134,7 +132,6 @@ jobs:
           jq -n \
             --arg sha "$HEAD_SHA" \
             --arg v "$VERSION" \
-            --arg digest "$EXPECTED_SHA" \
             '{
               name: "validate-release-pr",
               head_sha: $sha,
@@ -142,7 +139,7 @@ jobs:
               conclusion: "success",
               output: {
                 title: ("Release PR validated for " + $v),
-                summary: ("Independent re-verification: VSIX SHA-256 `" + $digest + "` matches committed marker, and SLSA build provenance verified from scratch.")
+                summary: "Independent re-verification: All platform VSIXs (darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64) verified against committed marker hashes, and SLSA build provenance verified from scratch."
               }
             }' \
           | gh api "repos/${{ github.repository }}/check-runs" --method POST --input -
