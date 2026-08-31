@@ -55,14 +55,15 @@ jobs:
           echo "$IN_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
             || fail "version '$IN_VERSION' is not a valid semver"
 
-          # Validate vsix_hashes is a valid JSON object with all 5 platforms
-          if ! echo "$IN_VSIX_HASHES" | jq -e 'type == "object"' >/dev/null 2>&1; then
-            fail "vsix_hashes is not a valid JSON object"
+          # Validate vsix_hashes: decode JSON-encoded string and validate structure
+          VSIX_HASHES_JSON=$(echo "$IN_VSIX_HASHES" | jq -r .)
+          if ! echo "$VSIX_HASHES_JSON" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            fail "vsix_hashes is not a valid JSON object after decoding"
           fi
 
           PLATFORMS=("darwin-arm64" "darwin-x64" "linux-arm64" "linux-x64" "win32-x64")
           for platform in "${PLATFORMS[@]}"; do
-            HASH=$(echo "$IN_VSIX_HASHES" | jq -r --arg p "$platform" '.[$p] // empty')
+            HASH=$(echo "$VSIX_HASHES_JSON" | jq -r --arg p "$platform" '.[$p] // empty')
             if ! echo "$HASH" | grep -Eq '^[a-f0-9]{64}$'; then
               fail "vsix_hashes.$platform is missing or not a valid 64-char hex digest"
             fi
@@ -89,7 +90,7 @@ jobs:
             echo "monorepo_repo=$IN_MONOREPO_REPO"
             echo "monorepo_tag=$IN_MONOREPO_TAG"
             echo "vsix_hashes<<EOF"
-            echo "$IN_VSIX_HASHES"
+            echo "$VSIX_HASHES_JSON"
             echo "EOF"
             echo "release_tag=$RELEASE_TAG"
             echo "branch=$BRANCH"
