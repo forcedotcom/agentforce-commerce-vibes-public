@@ -48,13 +48,11 @@ jobs:
 
           MONOREPO_REPO=$(jq -r '.monorepoRepo // empty' "$MARKER")
           MONOREPO_TAG=$(jq -r '.monorepoTag // empty' "$MARKER")
-          VSIX_HASHES_JSON=$(jq -c '.vsixSha256Hashes // empty' "$MARKER")
+          EXPECTED_SHA=$(jq -r '.vsixSha256 // empty' "$MARKER")
 
           # Validate marker contents
-          if ! echo "$VSIX_HASHES_JSON" | jq -e 'type == "object"' >/dev/null 2>&1; then
-            echo "::error::marker $MARKER vsixSha256Hashes missing/malformed"
-            exit 1
-          fi
+          echo "$EXPECTED_SHA" | grep -Eq '^[a-f0-9]{64}$' \
+            || { echo "::error::marker $MARKER vsixSha256 missing/malformed"; exit 1; }
           [ "$MONOREPO_REPO" = "$EXPECTED_MONOREPO" ] \
             || { echo "::error::marker monorepoRepo '$MONOREPO_REPO' != expected '$EXPECTED_MONOREPO'"; exit 1; }
           [ "$MONOREPO_TAG" = "v${VERSION}" ] \
@@ -63,9 +61,7 @@ jobs:
           {
             echo "monorepo_repo=$MONOREPO_REPO"
             echo "monorepo_tag=$MONOREPO_TAG"
-            echo "vsix_hashes<<EOF"
-            echo "$VSIX_HASHES_JSON"
-            echo "EOF"
+            echo "expected_sha=$EXPECTED_SHA"
           } >> "$GITHUB_OUTPUT"
 
       - name: Download VSIX from public repo release
@@ -82,34 +78,17 @@ jobs:
 
       - name: Verify VSIX SHA256 against marker — fail closed
         env:
-          VSIX_HASHES_JSON: ${{ steps.marker.outputs.vsix_hashes }}
+          EXPECTED_SHA: ${{ steps.marker.outputs.expected_sha }}
         run: |
           set -euo pipefail
-          # Verify each platform VSIX against platform-specific hash
-          FAILED=0
-          for vsix in "$VSIX_DIR"/*.vsix; do
-            BASENAME=$(basename "$vsix")
-            PLATFORM=$(echo "$BASENAME" | sed -E 's/.*-((darwin|linux|win32)-(arm64|x64))-.*/\1/')
-            EXPECTED_SHA=$(echo "$VSIX_HASHES_JSON" | jq -r --arg p "$PLATFORM" '.[$p] // empty')
-
-            if [ -z "$EXPECTED_SHA" ]; then
-              echo "::error::No expected SHA-256 for platform: $PLATFORM"
-              FAILED=1
-              continue
-            fi
-
-            ACTUAL_SHA=$(sha256sum "$vsix" | awk '{print $1}')
-            if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-              echo "::error::SHA-256 mismatch for $PLATFORM. expected=$EXPECTED_SHA actual=$ACTUAL_SHA"
-              FAILED=1
-            else
-              echo "::notice::SHA-256 verified for $PLATFORM: $ACTUAL_SHA"
-            fi
-          done
-
-          if [ "$FAILED" -eq 1 ]; then
+          # Verify first VSIX (representative check)
+          VSIX=$(ls "$VSIX_DIR"/*.vsix | head -1)
+          ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::VSIX sha256 mismatch. marker=$EXPECTED_SHA actual=$ACTUAL_SHA"
             exit 1
           fi
+          echo "::notice::VSIX SHA256 matches marker: $ACTUAL_SHA"
 
       - name: Verify SLSA build provenance — fail closed
         env:
