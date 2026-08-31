@@ -36,7 +36,7 @@ jobs:
       IN_MONOREPO_REPO: ${{ github.event.client_payload.monorepo_repo }}
       IN_MONOREPO_TAG: ${{ github.event.client_payload.monorepo_tag }}
       IN_RELEASE_URL: ${{ github.event.client_payload.release_url }}
-      IN_VSIX_SHA256: ${{ github.event.client_payload.vsix_sha256 }}
+      IN_VSIX_HASHES: ${{ github.event.client_payload.vsix_hashes }}
       IN_CHANGELOG_SECTION: ${{ github.event.client_payload.changelog_section }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -54,8 +54,20 @@ jobs:
           # 2) Strict shape checks
           echo "$IN_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
             || fail "version '$IN_VERSION' is not a valid semver"
-          echo "$IN_VSIX_SHA256" | grep -Eq '^[a-f0-9]{64}$' \
-            || fail "vsix_sha256 '$IN_VSIX_SHA256' is not a 64-char hex digest"
+
+          # Validate vsix_hashes is a valid JSON object with all 5 platforms
+          if ! echo "$IN_VSIX_HASHES" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            fail "vsix_hashes is not a valid JSON object"
+          fi
+
+          PLATFORMS=("darwin-arm64" "darwin-x64" "linux-arm64" "linux-x64" "win32-x64")
+          for platform in "${PLATFORMS[@]}"; do
+            HASH=$(echo "$IN_VSIX_HASHES" | jq -r --arg p "$platform" '.[$p] // empty')
+            if ! echo "$HASH" | grep -Eq '^[a-f0-9]{64}$'; then
+              fail "vsix_hashes.$platform is missing or not a valid 64-char hex digest"
+            fi
+          done
+
           if [ "$IN_MONOREPO_TAG" != "v${IN_VERSION}" ]; then
             fail "monorepo_tag '$IN_MONOREPO_TAG' does not match expected 'v${IN_VERSION}'"
           fi
@@ -76,7 +88,9 @@ jobs:
             echo "version=$IN_VERSION"
             echo "monorepo_repo=$IN_MONOREPO_REPO"
             echo "monorepo_tag=$IN_MONOREPO_TAG"
-            echo "vsix_sha256=$IN_VSIX_SHA256"
+            echo "vsix_hashes<<EOF"
+            echo "$IN_VSIX_HASHES"
+            echo "EOF"
             echo "release_tag=$RELEASE_TAG"
             echo "branch=$BRANCH"
           } >> "$GITHUB_OUTPUT"
@@ -100,17 +114,35 @@ jobs:
       - name: Verify VSIX integrity (sha256) — fail closed
         if: steps.validate.outputs.skip != 'true'
         env:
-          EXPECTED_SHA: ${{ steps.validate.outputs.vsix_sha256 }}
+          VSIX_HASHES_JSON: ${{ steps.validate.outputs.vsix_hashes }}
         run: |
           set -euo pipefail
-          # Verify the first VSIX matches (representative check)
-          VSIX=$(ls "$VSIX_DIR"/*.vsix | head -1)
-          ACTUAL_SHA=$(sha256sum "$VSIX" | awk '{print $1}')
-          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::error::VSIX sha256 mismatch. expected=$EXPECTED_SHA actual=$ACTUAL_SHA"
+          # Verify SHA-256 for each platform VSIX
+          FAILED=0
+          for vsix in "$VSIX_DIR"/*.vsix; do
+            BASENAME=$(basename "$vsix")
+            # Extract platform from filename: salesforce-commerce-vibes-PLATFORM-VERSION.vsix
+            PLATFORM=$(echo "$BASENAME" | sed -E 's/.*-((darwin|linux|win32)-(arm64|x64))-.*/\1/')
+            EXPECTED_SHA=$(echo "$VSIX_HASHES_JSON" | jq -r --arg p "$PLATFORM" '.[$p] // empty')
+
+            if [ -z "$EXPECTED_SHA" ]; then
+              echo "::error::No expected SHA-256 for platform: $PLATFORM"
+              FAILED=1
+              continue
+            fi
+
+            ACTUAL_SHA=$(sha256sum "$vsix" | awk '{print $1}')
+            if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+              echo "::error::SHA-256 mismatch for $PLATFORM. expected=$EXPECTED_SHA actual=$ACTUAL_SHA"
+              FAILED=1
+            else
+              echo "::notice::SHA-256 verified for $PLATFORM: $ACTUAL_SHA"
+            fi
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
             exit 1
           fi
-          echo "::notice::VSIX sha256 verified: $ACTUAL_SHA"
 
       # Note: SLSA attestation verification is skipped here because:
       # 1. Public repo GITHUB_TOKEN cannot access private repo attestations (HTTP 404)
@@ -129,7 +161,7 @@ jobs:
           VERSION: ${{ steps.validate.outputs.version }}
           MONOREPO_REPO: ${{ steps.validate.outputs.monorepo_repo }}
           MONOREPO_TAG: ${{ steps.validate.outputs.monorepo_tag }}
-          VSIX_SHA256: ${{ steps.validate.outputs.vsix_sha256 }}
+          VSIX_HASHES_JSON: ${{ steps.validate.outputs.vsix_hashes }}
           CHANGELOG_SECTION: ${{ env.IN_CHANGELOG_SECTION }}
         run: |
           set -euo pipefail
@@ -179,13 +211,13 @@ jobs:
               --arg tag "$MONOREPO_TAG" \
               --arg repo "$MONOREPO_REPO" \
               --arg url "$RELEASE_URL" \
-              --arg sha "$VSIX_SHA256" \
+              --argjson hashes "$VSIX_HASHES_JSON" \
               '{
                 version: $version,
                 monorepoTag: $tag,
                 monorepoRepo: $repo,
                 monorepoReleaseUrl: $url,
-                vsixSha256: $sha
+                vsixSha256Hashes: $hashes
               }' > "$1"
           }
           write_marker "releases/${VERSION}.json"
@@ -197,7 +229,7 @@ jobs:
           VERSION: ${{ steps.validate.outputs.version }}
           MONOREPO_REPO: ${{ steps.validate.outputs.monorepo_repo }}
           MONOREPO_TAG: ${{ steps.validate.outputs.monorepo_tag }}
-          VSIX_SHA256: ${{ steps.validate.outputs.vsix_sha256 }}
+          VSIX_HASHES_JSON: ${{ steps.validate.outputs.vsix_hashes }}
           BRANCH: ${{ steps.validate.outputs.branch }}
         run: |
           set -euo pipefail
@@ -230,7 +262,11 @@ jobs:
             printf '| Release tag (this repo) | `%s` |\n' "$RELEASE_TAG"
             printf '| Source repo | `%s` |\n' "$MONOREPO_REPO"
             printf '| Source release | [`%s`](%s) |\n' "$MONOREPO_TAG" "$RELEASE_URL"
-            printf '| VSIX SHA-256 | `%s` |\n' "$VSIX_SHA256"
+            printf '| VSIX SHA-256 (darwin-arm64) | `%s` |\n' "$(echo "$VSIX_HASHES_JSON" | jq -r '.["darwin-arm64"]')"
+            printf '| VSIX SHA-256 (darwin-x64) | `%s` |\n' "$(echo "$VSIX_HASHES_JSON" | jq -r '.["darwin-x64"]')"
+            printf '| VSIX SHA-256 (linux-arm64) | `%s` |\n' "$(echo "$VSIX_HASHES_JSON" | jq -r '.["linux-arm64"]')"
+            printf '| VSIX SHA-256 (linux-x64) | `%s` |\n' "$(echo "$VSIX_HASHES_JSON" | jq -r '.["linux-x64"]')"
+            printf '| VSIX SHA-256 (win32-x64) | `%s` |\n' "$(echo "$VSIX_HASHES_JSON" | jq -r '.["win32-x64"]')"
             printf '| Provenance | ✅ SLSA build provenance verified (built on `main`) |\n\n'
 
             printf '### What'\''s changing\n\n'
