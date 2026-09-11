@@ -55,13 +55,15 @@ The setup screen validates prerequisites before the chat unlocks.
 
 | Step | What it checks |
 |------|----------------|
-| Connected Commerce Org | Salesforce default org is authorized |
+| Commerce Org Connection | Salesforce default org is authorized |
 | B2C Commerce CLI | CLI is installed and accessible |
 | B2C Commerce Extension | Required VS Code extension is present |
 | B2C Commerce Project | Workspace contains a recognized B2C project (SFRA cartridges, PWA Kit v3, or Storefront Next) |
 
+For detailed setup steps, see [Install and Launch the Commerce Vibes Extension](https://developer.salesforce.com/docs/commerce/commerce-vibes/guide/cv-install-extension.html) in the _Agentforce Commerce Vibes Guide_.
+
 ### 3. Authorize Your Salesforce Org
-Click the **Connected Commerce Org** step to open the sign-in overlay. Enter your Salesforce org URL—the URL you use to log into Salesforce. The extension opens a terminal to run the Salesforce CLI login command. After authenticating in your browser, click **Re-check** to validate the connection.
+Click the **Commerce Org Connection** step to open the sign-in dialog. Enter your Salesforce org URL—the URL you use to log into Salesforce. The extension opens a terminal to run the Salesforce CLI login command. After authenticating in your browser, click **Check Status** to validate the connection.
 
 **Examples of org URLs:**
 - Production: `login.salesforce.com` or `mycompany.my.salesforce.com`
@@ -98,13 +100,7 @@ Manage extension settings from the Agentforce Commerce Vibes Settings panel insi
 
 ## Troubleshooting
 
-- **Skills not loading** — Run **Agentforce Commerce Vibes: Refresh Commerce Skills** from the Command Palette to re-download the latest skill set.
-
-- **MCP server not connecting** — Open the Toolkit panel, check the MCP tab for the server status, and click **Reconnect**.
-
-- **Capture diagnostics** — Run **Agentforce Commerce Vibes: Copy Diagnostics** from the Command Palette to copy system info and recent events to your clipboard for support.
-
-- **Enable debug logs** — Open the Agentforce Commerce Vibes Settings panel, enable debug logging, then run **Agentforce Commerce Vibes: Open Debug Logs**.
+See [Agentforce Commerce Vibes Troubleshooting](https://developer.salesforce.com/docs/commerce/commerce-vibes/guide/cv-troubleshooting.html).
 
 ## Privacy and Telemetry
 
@@ -115,3 +111,7 @@ To opt out, set `telemetry.telemetryLevel` to `"off"` in your VS Code settings.
 ## License
 
 This extension is licensed under the [Apache 2.0 License](LICENSE.txt).
+
+## See Also
+
+- [Agentforce Commerce Vibes Guide](https://developer.salesforce.com/docs/commerce/commerce-vibes/guide/cv-agentforce-commerce-vibes.html)
