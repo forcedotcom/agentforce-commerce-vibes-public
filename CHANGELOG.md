@@ -1,5 +1,22 @@
 # Change Log
 
+## 1.0.1
+
+
+### Enhancements
+
+**Setup Checklist — Dependency Installation**
+- **B2C Commerce CLI**: clicking the row now runs `npm install -g @salesforce/b2c-cli` in a reusable VS Code terminal instead of opening the docs page, so the CLI installs (and upgrades in place) with visible progress.
+- **CLI update detection**: the row now emits `needs-update` when the installed CLI is older than the npm registry's `latest`; the same click upgrades to the latest version.
+- **B2C Commerce Extension**: clicking the row now invokes VS Code's native marketplace install flow via `workbench.extensions.installExtension` instead of opening the GitHub releases page.
+
+### Changed
+- Marketplace Q & A now opens the Agentforce Commerce Vibes troubleshooting guide
+
+### Fixed
+- Scaffolding a new Storefront Next project now asks only for the folder name in chat, then lets the CLI prompt for vertical and Commerce Cloud settings in the terminal
+- Previewing a Storefront Next project recovers from common first-install pnpm errors (stale lockfile verification and blocked dependency build scripts)
+
 ## 1.0.0
 
 
