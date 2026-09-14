@@ -1,5 +1,15 @@
 # Change Log
 
+## 1.0.2
+
+
+### Fixed
+- Installing a dependency from the setup checklist no longer drops you out of the checklist and into chat mid-install — the checklist stays open through the recheck that runs after the click.
+
+### Enhancements
+- Clicking the **B2C Commerce CLI** row automatically refreshes the checklist once `npm install -g @salesforce/b2c-cli` finishes, so the row flips to Ready without a manual Recheck.
+- The post-auth checklist footer now shows **Start Chat** in place of Dismiss, so returning to chat reads as a positive next step rather than a dismissal.
+
 ## 1.0.1
 
 
