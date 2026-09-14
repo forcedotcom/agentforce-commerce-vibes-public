@@ -112,6 +112,19 @@ jobs:
           # Save all VSIXes for later attestation verification
           echo "VSIX_DIR=/tmp/vsix" >> "$GITHUB_ENV"
 
+      - name: Download README from public repo release
+        if: steps.validate.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/readme
+          gh release download "v${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'README.md' \
+            --dir /tmp/readme
+          [ -s /tmp/readme/README.md ] || { echo "::error::No README.md asset on ${{ github.repository }}@v${VERSION}"; exit 1; }
+
       - name: Verify VSIX integrity (sha256) — fail closed
         if: steps.validate.outputs.skip != 'true'
         env:
@@ -223,6 +236,7 @@ jobs:
           }
           write_marker "releases/${VERSION}.json"
           write_marker "releases/latest.json"
+          cp /tmp/readme/README.md README.md
 
       - name: Open release PR (using this repo's own token)
         if: steps.validate.outputs.skip != 'true'
@@ -239,7 +253,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git fetch origin "$BRANCH" 2>/dev/null && git checkout "$BRANCH" || git checkout -b "$BRANCH"
-          git add CHANGELOG.md "releases/${VERSION}.json" releases/latest.json
+          git add CHANGELOG.md README.md "releases/${VERSION}.json" releases/latest.json
 
           if git diff --cached --quiet; then
             echo "::notice::No changes to commit on $BRANCH; PR may already be up to date"
@@ -277,6 +291,7 @@ jobs:
 
             printf '### Files in this PR\n\n'
             printf -- '- `CHANGELOG.md` — new `## %s` section\n' "$VERSION"
+            printf -- '- `README.md` — extension README from the mirrored release\n'
             printf -- '- `releases/%s.json` — immutable release marker\n' "$VERSION"
             printf -- '- `releases/latest.json` — pointer updated to this version\n\n'
 
