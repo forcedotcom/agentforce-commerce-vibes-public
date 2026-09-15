@@ -35,7 +35,8 @@ jobs:
     strategy:
       matrix:
         target: [darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64]
-      fail-fast: false # Continue publishing other targets if one fails
+      fail-fast: false
+      max-parallel: 1
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
@@ -131,13 +132,40 @@ jobs:
           fi
           echo "::notice::SHA-256 verified for $TARGET: $ACTUAL_SHA"
 
-      # Publish via IDEE composite action - includes audit logging, token masking, validation
       - name: Publish to VS Code Marketplace
-        uses: salesforcecli/github-workflows/.github/actions/vscode/publish-vsix@029fab157f4fa95497bff43f70c2faaf3f0fcf41 # PR #158 merge
-        with:
-          vsix-path: ${{ steps.download.outputs.vsix }}
-          publish-tool: vsce
-          pre-release: 'false'
-          dry-run: ${{ github.event.inputs.dry-run || 'false' }}
         env:
           VSCE_PERSONAL_ACCESS_TOKEN: ${{ secrets.VSCE_PERSONAL_ACCESS_TOKEN }}
+          VSIX: ${{ steps.download.outputs.vsix }}
+          DRY_RUN: ${{ github.event.inputs.dry-run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$VSIX" ]; then
+            echo "::error::VSIX file not found at $VSIX"
+            exit 1
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "::notice::DRY RUN — would vsce publish --packagePath $VSIX --skip-duplicate"
+            exit 0
+          fi
+          if [ -z "${VSCE_PERSONAL_ACCESS_TOKEN:-}" ]; then
+            echo "::error::VSCE_PERSONAL_ACCESS_TOKEN is not set"
+            exit 1
+          fi
+          export VSCE_PAT="$VSCE_PERSONAL_ACCESS_TOKEN"
+
+          attempt=1
+          max_attempts=3
+          while true; do
+            echo "::notice::vsce publish attempt ${attempt}/${max_attempts} for ${{ matrix.target }}"
+            if npx @vscode/vsce publish --packagePath "$VSIX" --skip-duplicate; then
+              echo "::notice::Published ${{ matrix.target }} to VS Code Marketplace"
+              exit 0
+            fi
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::vsce publish failed after ${max_attempts} attempts"
+              exit 1
+            fi
+            echo "::warning::vsce publish failed; waiting 60s before retry"
+            sleep 60
+            attempt=$((attempt + 1))
+          done
