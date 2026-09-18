@@ -1,5 +1,11 @@
 # Change Log
 
+## 1.0.3
+
+
+### Fixed
+- Marketplace Q&A on the Agentforce Commerce Vibes listing now opens the troubleshooting guide.
+
 ## 1.0.2
 
 
