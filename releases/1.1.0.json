@@ -1,0 +1,13 @@
+{
+  "version": "1.1.0",
+  "monorepoTag": "v1.1.0",
+  "monorepoRepo": "SalesforceCommerceCloud/commerce-vibes-builder",
+  "monorepoReleaseUrl": "https://github.com/SalesforceCommerceCloud/commerce-vibes-builder/releases/tag/v1.1.0",
+  "vsixSha256Hashes": {
+    "darwin-arm64": "e00cf44e05a85fc7e7cdf435c18340479e309ff6f1962ef8f2916f1637583dbb",
+    "darwin-x64": "04ef0794420c7dd139c91d7d895f7eb6c574a9031279a1fb210329cfb3625675",
+    "linux-arm64": "3c8f09548a44e805ee0de824e8b39f2ff2c6b3eb8b752b3f8a3259aa5aa2d6f6",
+    "linux-x64": "11e91131aad0b14a96ae8c2f9164293de80581b060e64f19919c20a68cd14ed4",
+    "win32-x64": "1ac803c22271abae955687fac41408ae9b4a243925a6853264dfba4d8ca89f5e"
+  }
+}

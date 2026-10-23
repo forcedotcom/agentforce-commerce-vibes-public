@@ -1,5 +1,14 @@
 # Change Log
 
+## 1.1.0
+
+
+### Fixed
+- Fixed authentication issues for customer orgs using Salesforce CLI
+- Patched critical DOMPurify security vulnerability (GHSA-cg2g-xh64-v4q7) in dependency chain
+- Patched critical security vulnerabilities in B2C CLI dependency chain
+- Preserved B2C CLI installer functionality during dependency updates
+
 ## 1.0.3
 
 
